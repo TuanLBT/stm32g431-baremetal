@@ -1,6 +1,5 @@
 #include "stm32g431xx.h"
 
-
 static void systick_init(void)
 {
 	//1. LOAD  → quy định counter sẽ đếm bao nhiêu
@@ -122,20 +121,34 @@ static void GPIO_init(void)
 	// Bật clock cho GPIOC 
         RCC->AHB2ENR |= RCC_AHB2ENR_GPIOCEN;
 
-
         //Bật clock cho GPIOA
 	RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN;
 
     	// PC13 = input mode 00 at MODE13
     	GPIOC->MODER &= ~(3U << (13 * 2));
 
-	// PA5(LD2) = alternate function  mode 
+	// PA5(LD2) GPIO alternate function  mode 
 	GPIOA->MODER &= ~(3U << (5 * 2));
 	GPIOA->MODER |=  (2U << (5 * 2));
 
-	//alter function selection
+	//alter function selection for PA5
 	GPIOA->AFR[0] &= ~GPIO_AFRL_AFSEL5;
 	GPIOA->AFR[0] |= GPIO_AFRL_AFSEL5_0;
+
+	//PA2 (TX),PA3(RX) GPIO alternate function mode 
+	GPIOA->MODER &= ~(3U << (2 * 2));
+        GPIOA->MODER |=  (2U << (2 * 2));
+
+	GPIOA->MODER &= ~(3U << (3 * 2));
+        GPIOA->MODER |=  (2U << (3 * 2));
+
+	//alter function selection for PA2 and PA3 (AF12)
+	GPIOA->AFR[0] &= ~GPIO_AFRL_AFSEL2;
+        GPIOA->AFR[0] |= GPIO_AFRL_AFSEL2_2 | GPIO_AFRL_AFSEL2_3;
+
+	GPIOA->AFR[0] &= ~GPIO_AFRL_AFSEL3;
+        GPIOA->AFR[0] |= GPIO_AFRL_AFSEL3_2 | GPIO_AFRL_AFSEL3_3;
+
 }
 
 static void TIM2_init(void)
@@ -143,7 +156,7 @@ static void TIM2_init(void)
 	//timer 2 clock enable (tim_ker_ck) internal clock
 	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
 
-	//timer2 prescaler (1000:1)
+	//timer counter clock = timer clock / 16000
 	TIM2->PSC = 15999;
 	//APB1 clock prescaler (default 1:1)
 
@@ -186,6 +199,101 @@ static void TIM2_init(void)
 
 }
 
+
+static void LPUART1_init(void)
+{
+	//clock source selection (HSI16)
+	RCC->CCIPR &= ~RCC_CCIPR_LPUART1SEL;
+	RCC->CCIPR |= RCC_CCIPR_LPUART1SEL_1;
+
+	//enable clock for LPUART1
+	RCC->APB1ENR2 |= RCC_APB1ENR2_LPUART1EN;
+
+
+	// disable UE before config
+	LPUART1->CR1 &= ~USART_CR1_UE;
+
+	//1 start bit , 8 data bits length 
+	LPUART1->CR1 &= ~USART_CR1_M0;
+	LPUART1->CR1 &= ~USART_CR1_M1;
+
+	//baud rate (115200 symbol/bit events per second)
+	LPUART1->BRR = 35556;
+
+	//number of stop bits (1 stopbit (00))
+	LPUART1->CR2 &= ~USART_CR2_STOP;
+
+	//enable the LPUART1
+	LPUART1->CR1 &= ~USART_CR1_UE;
+	LPUART1->CR1 |= USART_CR1_UE;
+
+	//enable DMA (if use)
+
+	//Set the TE bit in USART_CR1 to send an idle frame as first transmission.
+	LPUART1->CR1 |= USART_CR1_TE;
+
+	//Set the RE bit LPUART_CR1. This enables the receiver which begins searching for a start bit.
+	LPUART1->CR1 |= USART_CR1_RE;
+
+}
+
+static void LPUART1_transmit(uint8_t *msg, uint32_t len)
+{
+
+	//Write the data to send in the USART_TDR register.
+	/*TXE/TXFNF = 	TDR sẵn sàng nhận byte tiếp theo
+			TC = byte cuối đã truyền xong hoàn toàn*/
+	for (uint32_t i=0; i < len; i++)
+	{
+		while ((LPUART1->ISR & USART_ISR_TXE_TXFNF) == 0) {}
+		LPUART1->TDR = msg[i];
+	}
+	while ((LPUART1->ISR & USART_ISR_TC) == 0) {}
+}
+
+static void LPUART1_transmit_byte(uint8_t data)
+{
+	while ((LPUART1->ISR & USART_ISR_TXE_TXFNF) == 0) {}
+	LPUART1->TDR = data;
+}
+
+static void LPUART1_transmit_uint32(uint32_t value)
+{
+	uint8_t buf[10];
+	uint32_t i = 0;
+
+	// special case: 0
+	if (value == 0)
+	{
+		LPUART1_transmit_byte('0');
+		return;
+	}
+
+	// tách từng chữ số từ phải sang trái
+	while (value > 0)
+	{
+		buf[i] = (value % 10U) + '0';
+		value /= 10U;
+		i++;
+	}
+
+	// gửi ngược lại để đúng thứ tự
+	while (i > 0)
+	{
+		i--;
+		LPUART1_transmit_byte(buf[i]);
+	}
+}
+
+static uint32_t  LPUART1_receive(void)
+{
+	//wait if RXNE is set (when a character is received)
+	while ((LPUART1->ISR & USART_ISR_RXNE) == 0) {}
+
+	//store byte received
+	return LPUART1->RDR;
+}
+
 int main(void)
 {
 	//init
@@ -193,12 +301,20 @@ int main(void)
 	TIM2_init();
 	systick_init();
 	ADC_init();
+	LPUART1_init();
+	uint32_t val;
+	while (1)
+	{
+		if((GPIOC->IDR & GPIO_IDR_ID13) != 0)
+		{
+			delay_ms(20);
+			val = ADC_read();
+			LPUART1_transmit_byte_uint32(val);
 
-    while (1)
-    {
-	uint32_t ADC_val = ADC_read();
-	uint32_t duty_cycle_cal = (ADC_val*1000U)/4059U;
-	TIM2->CCR1 = duty_cycle_cal;
-    }
+			while((GPIOC->IDR & GPIO_IDR_ID13) !=0);
+		}
+
+
+	}
 }
 
