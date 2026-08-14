@@ -29,6 +29,7 @@ static void delay_ms(uint32_t ms)
 
 static void ADC_init(void)
 {
+
 /*configurate clock and mode*/
 
 	// Enable GPIOC clock
@@ -96,6 +97,7 @@ static void ADC_init(void)
 	ADC1->ISR |= ADC_ISR_ADRDY;
 
 /*sampling time*/
+
 	ADC1->SMPR1 &= ~ADC_SMPR1_SMP8_Msk;
 	ADC1->SMPR1 |= ADC_SMPR1_SMP8_2; //47.5 ADC clock cycles (100)
 
@@ -115,42 +117,88 @@ static uint32_t  ADC_read(void)
 	return ADC1->DR;
 }
 
-int main(void)
+static void GPIO_init(void)
 {
-    	// Bật clock cho GPIOC GPIOA
-	RCC->AHB2ENR |= RCC_AHB2ENR_GPIOCEN;
+	// Bật clock cho GPIOC 
+        RCC->AHB2ENR |= RCC_AHB2ENR_GPIOCEN;
+
+
+        //Bật clock cho GPIOA
 	RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN;
 
     	// PC13 = input mode 00 at MODE13
     	GPIOC->MODER &= ~(3U << (13 * 2));
 
-	// PA5 = output mode
+	// PA5(LD2) = alternate function  mode 
 	GPIOA->MODER &= ~(3U << (5 * 2));
-	GPIOA->MODER |=  (1U << (5 * 2));
+	GPIOA->MODER |=  (2U << (5 * 2));
 
-	//init systick 
+	//alter function selection
+	GPIOA->AFR[0] &= ~GPIO_AFRL_AFSEL5;
+	GPIOA->AFR[0] |= GPIO_AFRL_AFSEL5_0;
+}
+
+static void TIM2_init(void)
+{
+	//timer 2 clock enable (tim_ker_ck) internal clock
+	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+
+	//timer2 prescaler (1000:1)
+	TIM2->PSC = 15999;
+	//APB1 clock prescaler (default 1:1)
+
+/*output compare mode proced*/
+
+	//select the counter clock (timer2 clock)
+
+	//Write the desired data in the TIMx_ARR and TIMx_CCRx registers.
+	//PWM frequency (1hz)
+	TIM2->ARR = 999;
+	//duty cycle (0%)
+	TIM2->CCR1 = 0;
+
+	//Set the CCxIE and/or CCxDE bits if an interrupt and/or a DMA request is to be generated. (not use)
+
+	//ensure capture/compare 1 selection is output (Channel 1 = output)
+	TIM2->CCMR1 &= ~TIM_CCMR1_CC1S;
+
+	//Select the output mode (PWM mode 1)
+	TIM2->CCMR1 &= ~TIM_CCMR1_OC1M;
+	TIM2->CCMR1 |= TIM_CCMR1_OC1M_1 | TIM_CCMR1_OC1M_2;
+
+	//enable the output
+	TIM2->CCER |= TIM_CCER_CC1E;
+
+
+/*PWM config*/
+	//edge-aligned mode (00) (counter đếm theo kiểu nào) (không phải PWM )
+	TIM2->CR1 &= ~TIM_CR1_CMS;
+
+	//couting up (0)
+	TIM2->CR1 &= ~TIM_CR1_DIR;
+
+	/*tạo một update event để nạp PSC/ARR ngay lập tức:
+	Lý do là PSC có preload, giá trị m viết vào không nhất thiết được dùng ngay cho counter cho đến khi có update event. UG ép một update event ngay lúc init*/
+	TIM2->EGR |= TIM_EGR_UG;
+
+	//enable counter
+	TIM2->CR1 |= TIM_CR1_CEN;
+
+}
+
+int main(void)
+{
+	//init
+	GPIO_init();
+	TIM2_init();
 	systick_init();
 	ADC_init();
 
     while (1)
     {
-	uint32_t val = ADC_read();
-
-	if((GPIOC->IDR & GPIO_IDR_ID13) != 0)
-	{
-		delay_ms(20);
-		if ((GPIOC->IDR & GPIO_IDR_ID13) != 0)
-		{
-			// LED ON
-        		GPIOA->BSRR = (1U << 5);
-			while((GPIOC->IDR & GPIO_IDR_ID13) !=0);
-		}
-	}
-	else
-	{
-        	// LED OFF
-        	GPIOA->BSRR = (1U << (5 + 16));
-	}
+	uint32_t ADC_val = ADC_read();
+	uint32_t duty_cycle_cal = (ADC_val*1000U)/4059U;
+	TIM2->CCR1 = duty_cycle_cal;
     }
 }
 
