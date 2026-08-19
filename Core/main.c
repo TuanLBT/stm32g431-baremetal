@@ -1,5 +1,9 @@
 #include "stm32g431xx.h"
 
+
+volatile uint32_t push_cnt = 0;
+
+
 static void systick_init(void)
 {
 	//1. LOAD  → quy định counter sẽ đếm bao nhiêu
@@ -125,7 +129,7 @@ static void GPIO_init(void)
 	RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN;
 
     	// PC13 = input mode 00 at MODE13
-    	GPIOC->MODER &= ~(3U << (13 * 2));
+    GPIOC->MODER &= ~(3U << (13 * 2));
 
 	// PA5(LD2) GPIO alternate function  mode 
 	GPIOA->MODER &= ~(3U << (5 * 2));
@@ -150,6 +154,7 @@ static void GPIO_init(void)
         GPIOA->AFR[0] |= GPIO_AFRL_AFSEL3_2 | GPIO_AFRL_AFSEL3_3;
 
 }
+
 
 static void TIM2_init(void)
 {
@@ -294,6 +299,57 @@ static uint32_t  LPUART1_receive(void)
 	return LPUART1->RDR;
 }
 
+/*
+EXTI 13 (PC13)
+configure tje EXTI_IMR register 
+Configure the Trigger Selection bits of the Interrupt line (EXTI_RTSR and EXTI_FTSR)
+Configure the enable and mask bits that control the NVIC IRQ channel mapped to the
+EXTI so that an interrupt coming from one of the EXTI lines can be correctly
+acknowledged.
+*/
+static void EXTI_config(void)
+{
+    RCC->AHB2ENR |= RCC_AHB2ENR_GPIOCEN;
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+
+    // PC13 input
+    //GPIOC->MODER &= ~(3U << (13 * 2));
+
+    // PC13 -> EXTI13
+    SYSCFG->EXTICR[3] &= ~SYSCFG_EXTICR4_EXTI13_Msk;
+    SYSCFG->EXTICR[3] |=  SYSCFG_EXTICR4_EXTI13_PC;
+
+    // unmask EXTI13
+    EXTI->IMR1 |= EXTI_IMR1_IM13;
+
+    // both rising and falling edge trigger interrupt 
+    EXTI->FTSR1 |= EXTI_FTSR1_FT13;
+    EXTI->RTSR1 |=  EXTI_RTSR1_RT13;
+
+	// enable EXTI15_10_IRQn interrupt in NVIC (CMSIS Core API)
+    NVIC_SetPriority(EXTI15_10_IRQn, 5);
+    NVIC_EnableIRQ(EXTI15_10_IRQn);
+}
+
+void EXTI15_10_IRQHandler(void)
+{
+    if (EXTI->PR1 & EXTI_PR1_PIF13)//phân biệt ngắt từ EXTI13 hay EXTI10,11,12,14,15
+    {
+		EXTI->PR1 = EXTI_PR1_PIF13;
+		push_cnt++;
+		if(GPIOC->IDR & GPIO_IDR_ID13)
+		{
+			//PWM = 100% duty cycle
+			TIM2->CCR1 = 1000;
+		}
+		else
+		{
+			//PWM = 0% duty cycle
+			TIM2->CCR1 = 0;
+		}
+	}
+}
+
 int main(void)
 {
 	//init
@@ -302,18 +358,9 @@ int main(void)
 	systick_init();
 	ADC_init();
 	LPUART1_init();
-	uint32_t val;
+	EXTI_config();
 	while (1)
 	{
-		if((GPIOC->IDR & GPIO_IDR_ID13) != 0)
-		{
-			delay_ms(20);
-			val = ADC_read();
-			LPUART1_transmit_byte_uint32(val);
-
-			while((GPIOC->IDR & GPIO_IDR_ID13) !=0);
-		}
-
 
 	}
 }

@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug STM32G431",
+      "type": "cortex-debug",
+      "request": "launch",
+      "servertype": "openocd",
+
+      "executable": "${workspaceFolder}/build/firmware.elf",
+
+      "configFiles": [
+        "interface/stlink.cfg",
+        "target/stm32g4x.cfg"
+      ],
+
+      "serverpath": "/usr/bin/openocd",
+      "gdbPath": "/usr/bin/gdb",
+
+      "runToEntryPoint": "main"
+    }
+  ]
+}
